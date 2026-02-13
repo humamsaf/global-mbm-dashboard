@@ -188,7 +188,8 @@ metric = st.radio(
     horizontal=True
 )
 
-plot_col = "mechanism_type_count" if metric == "Total mechanisms (0–8)" else "vcm_projects_sum"
+st.caption("Map color: Total mechanisms (0–8)")
+plot_col = "mechanism_type_count"
 
 missing_iso = country_summary[country_summary["iso3"].isna()]["Country"].tolist()
 if missing_iso:
