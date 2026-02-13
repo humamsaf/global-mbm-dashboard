@@ -177,13 +177,11 @@ vcm_sum = f.loc[f["mechanism_type"] == "VCM project", "vcm_projects"].sum(min_co
 k4.metric("VCM projects (sum)", 0 if pd.isna(vcm_sum) else int(vcm_sum))
 
 st.divider()
-MAP_OPTIONS = ["Total mechanisms (0–8)"] + list(MECH_COLS.values())
-map_choice = st.selectbox("Map mode", MAP_OPTIONS, index=0, key="map_choice")
-
 st.subheader("World map")
 
 MAP_OPTIONS = ["Total mechanisms (0–8)"] + list(MECH_COLS.values())
 map_choice = st.selectbox("Map mode", MAP_OPTIONS, index=0, key="map_choice")
+
 
 # Base countries (include zero cases)
 base = wide_view[["Country", "Region"]].drop_duplicates().copy()
