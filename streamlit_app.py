@@ -107,6 +107,99 @@ vcm_sum = f.loc[f["mechanism_type"] == "VCM project", "vcm_projects"].sum(min_co
 k4.metric("VCM projects (sum)", 0 if pd.isna(vcm_sum) else int(vcm_sum))
 
 st.divider()
+import pycountry
+
+# --- helper: country name -> ISO3
+MANUAL_ISO3 = {
+    "Côte d’Ivoire": "CIV",
+    "Côte d'Ivoire": "CIV",
+    "São Tomé and Príncipe": "STP",
+    "Democratic Republic of the Congo": "COD",
+    "Republic of the Congo": "COG",
+    "United States": "USA",
+    "Russia": "RUS",
+    "Iran": "IRN",
+    "Syria": "SYR",
+    "Vatican City": "VAT",
+    "North Korea": "PRK",
+    "South Korea": "KOR",
+    "Laos": "LAO",
+    "Timor-Leste": "TLS",
+    "Brunei Darussalam": "BRN",
+    "Bolivia": "BOL",
+    "Venezuela": "VEN",
+    "Tanzania": "TZA",
+    "Micronesia": "FSM",
+}
+
+def to_iso3(name: str):
+    name = (name or "").strip()
+    if name in MANUAL_ISO3:
+        return MANUAL_ISO3[name]
+    try:
+        c = pycountry.countries.lookup(name)
+        return c.alpha_3
+    except Exception:
+        return None
+
+# --- Build a country-level summary for mapping
+# metric options:
+# 1) total mechanisms present (count distinct mechanism types excluding VCM? include? we’ll include types where there is an entry)
+map_df = f.copy()
+
+# Count mechanisms per country (distinct types) within current filters
+count_by_country = (
+    map_df.groupby(["Country"])["mechanism_type"]
+    .nunique()
+    .reset_index(name="mechanism_type_count")
+)
+
+# VCM projects sum per country (optional second metric)
+vcm_by_country = (
+    map_df[map_df["mechanism_type"] == "VCM project"]
+    .dropna(subset=["vcm_projects"])
+    .groupby("Country")["vcm_projects"]
+    .sum()
+    .reset_index()
+)
+
+country_summary = count_by_country.merge(vcm_by_country, on="Country", how="left")
+country_summary["vcm_projects"] = country_summary["vcm_projects"].fillna(0)
+
+country_summary["iso3"] = country_summary["Country"].apply(to_iso3)
+
+st.subheader("World map (choropleth)")
+
+metric = st.radio(
+    "Map metric",
+    ["Mechanism types count", "VCM projects (sum)"],
+    horizontal=True
+)
+
+plot_col = "mechanism_type_count" if metric == "Mechanism types count" else "vcm_projects"
+
+missing_iso = country_summary[country_summary["iso3"].isna()]["Country"].tolist()
+if missing_iso:
+    st.warning(
+        f"ISO3 tidak ketemu untuk {len(missing_iso)} negara (mereka tidak muncul di peta). "
+        f"Contoh: {', '.join(missing_iso[:10])}"
+    )
+
+m = country_summary.dropna(subset=["iso3"]).copy()
+
+fig_map = px.choropleth(
+    m,
+    locations="iso3",
+    color=plot_col,
+    hover_name="Country",
+    hover_data={
+        "iso3": True,
+        "mechanism_type_count": True,
+        "vcm_projects": True,
+    },
+)
+
+st.plotly_chart(fig_map, use_container_width=True)
 
 # ---- Charts
 c1, c2 = st.columns(2)
