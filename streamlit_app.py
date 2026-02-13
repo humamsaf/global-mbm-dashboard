@@ -142,50 +142,63 @@ def to_iso3(name: str):
     except Exception:
         return None
 
-# --- Build a country-level summary for mapping
-# metric options:
-# 1) total mechanisms present (count distinct mechanism types excluding VCM? include? we’ll include types where there is an entry)
-map_df = f.copy()
+# --- Build a country-level summary for mapping (with hover details)
 
-# Count mechanisms per country (distinct types) within current filters
-count_by_country = (
-    map_df.groupby(["Country"])["mechanism_type"]
-    .nunique()
-    .reset_index(name="mechanism_type_count")
-)
+# Helper: satu mechanism_type bisa punya banyak detail (gabungkan)
+def summarize_mechanisms(df_long: pd.DataFrame) -> pd.DataFrame:
+    # Gabungkan detail per (Country, mechanism_type)
+    g = (
+        df_long.groupby(["Country", "mechanism_type"])["mechanism_detail"]
+        .apply(lambda s: "; ".join(sorted({x for x in s.astype(str).str.strip() if x and x.lower() != "nan"})))
+        .reset_index()
+    )
 
-# VCM projects sum per country (optional second metric)
-vcm_by_country = (
-    map_df[map_df["mechanism_type"] == "VCM project"]
-    .dropna(subset=["vcm_projects"])
-    .groupby("Country")["vcm_projects"]
-    .sum()
-    .reset_index()
-)
+    # Buat “bullet list” per country
+    # Format: "ETS: UK ETS | Carbon Tax: UK Carbon Price Support | ..."
+    lines = (
+        g.assign(line=lambda d: d["mechanism_type"] + ": " + d["mechanism_detail"])
+         .groupby("Country")["line"]
+         .apply(lambda s: "<br>".join(s.tolist()))
+         .reset_index(name="existing_mechanisms_html")
+    )
 
-country_summary = count_by_country.merge(vcm_by_country, on="Country", how="left")
-country_summary["vcm_projects"] = country_summary["vcm_projects"].fillna(0)
+    # Count mechanism types present (0–8)
+    counts = g.groupby("Country")["mechanism_type"].nunique().reset_index(name="mechanism_type_count")
 
+    # VCM projects sum (untuk angka)
+    vcm = (
+        df_long[df_long["mechanism_type"] == "VCM project"]
+        .dropna(subset=["vcm_projects"])
+        .groupby("Country")["vcm_projects"]
+        .sum()
+        .reset_index(name="vcm_projects_sum")
+    )
+
+    out = counts.merge(lines, on="Country", how="left").merge(vcm, on="Country", how="left")
+    out["vcm_projects_sum"] = out["vcm_projects_sum"].fillna(0)
+    return out
+
+country_summary = summarize_mechanisms(f)
 country_summary["iso3"] = country_summary["Country"].apply(to_iso3)
 
 st.subheader("World map (choropleth)")
-
 metric = st.radio(
-    "Map metric",
-    ["Mechanism types count", "VCM projects (sum)"],
+    "Map color",
+    ["Total mechanisms (0–8)", "VCM projects (sum)"],
     horizontal=True
 )
 
-plot_col = "mechanism_type_count" if metric == "Mechanism types count" else "vcm_projects"
+plot_col = "mechanism_type_count" if metric == "Total mechanisms (0–8)" else "vcm_projects_sum"
 
 missing_iso = country_summary[country_summary["iso3"].isna()]["Country"].tolist()
 if missing_iso:
     st.warning(
-        f"ISO3 tidak ketemu untuk {len(missing_iso)} negara (mereka tidak muncul di peta). "
+        f"ISO3 tidak ketemu untuk {len(missing_iso)} negara (tidak tampil di peta). "
         f"Contoh: {', '.join(missing_iso[:10])}"
     )
 
 m = country_summary.dropna(subset=["iso3"]).copy()
+
 
 fig_map = px.choropleth(
     m,
@@ -195,9 +208,22 @@ fig_map = px.choropleth(
     hover_data={
         "iso3": True,
         "mechanism_type_count": True,
-        "vcm_projects": True,
+        "vcm_projects_sum": True,
+        "existing_mechanisms_html": False,  # kita pakai hovertemplate biar rapi
     },
 )
+
+fig_map.update_traces(
+    hovertemplate=
+    "<b>%{hovertext}</b><br>" +
+    "ISO3: %{customdata[0]}<br>" +
+    "Total mechanisms (0–8): %{customdata[1]}<br>" +
+    "VCM projects (sum): %{customdata[2]}<br><br>" +
+    "%{customdata[3]}<extra></extra>",
+    customdata=m[["iso3", "mechanism_type_count", "vcm_projects_sum", "existing_mechanisms_html"]].values,
+)
+
+st.plotly_chart(fig_map, use_container_width=True)
 
 st.plotly_chart(fig_map, use_container_width=True)
 
