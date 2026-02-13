@@ -138,13 +138,16 @@ region_sel = st.sidebar.multiselect("Region", sorted(long["Region"].dropna().uni
 type_sel = st.sidebar.multiselect("Mechanism type", sorted(long["mechanism_type"].dropna().unique()), key="f_type")
 country_sel = st.sidebar.multiselect("Country", sorted(long["Country"].dropna().unique()), key="f_country")
 keyword = st.sidebar.text_input("Search in details", value="", key="f_kw").strip()
+st.sidebar.caption(
+    f"Active filters → Region:{len(region_sel)} | Type:{len(type_sel)} | Country:{len(country_sel)} | Keyword:'{keyword}'"
+)
 
 if st.sidebar.button("Reset filters", use_container_width=True):
-    st.session_state["f_region"] = []
-    st.session_state["f_type"] = []
-    st.session_state["f_country"] = []
-    st.session_state["f_kw"] = ""
+    for k in ["f_region", "f_type", "f_country", "f_kw"]:
+        if k in st.session_state:
+            del st.session_state[k]
     st.rerun()
+
 
 f = long.copy()
 if region_sel:
@@ -164,6 +167,10 @@ if region_sel:
     wide_view = wide_view[wide_view["Region"].isin(region_sel)]
 if country_sel:
     wide_view = wide_view[wide_view["Country"].isin(country_sel)]
+
+st.write("DEBUG wide countries:", wide["Country"].nunique())
+st.write("DEBUG wide_view countries:", wide_view["Country"].nunique())
+
 
 k2.metric("Countries in view", int(wide_view["Country"].nunique()))
 
