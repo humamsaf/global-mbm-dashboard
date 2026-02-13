@@ -40,7 +40,6 @@ MANUAL_ISO3 = {
     "Tanzania": "TZA",
     "Micronesia": "FSM",
     "Palestine": "PSE",
-
 }
 
 def to_iso3(name: str):
@@ -81,7 +80,6 @@ def tidy_long(df_raw: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     long = long.drop(columns=["mechanism_type_raw"])
 
     long["mechanism_detail"] = long["mechanism_detail"].astype(str).str.strip()
-    long = long[long["mechanism_detail"].notna()]
     long = long[long["mechanism_detail"] != ""]
     long = long[long["mechanism_detail"].str.lower() != "nan"]
 
@@ -90,7 +88,7 @@ def tidy_long(df_raw: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     mask_vcm = long["mechanism_type"] == "VCM project"
     long.loc[mask_vcm, "vcm_projects"] = pd.to_numeric(long.loc[mask_vcm, "mechanism_detail"], errors="coerce")
 
-    # buang non-VCM yang "0"
+    # drop non-VCM zeros
     long = long[~((~mask_vcm) & (long["mechanism_detail"] == "0"))]
 
     return df, long
@@ -102,11 +100,11 @@ def summarize_mechanisms(df_long: pd.DataFrame) -> pd.DataFrame:
         .reset_index()
     )
 
-    lines = (
-        g.assign(line=lambda d: d["mechanism_type"] + ": " + d["mechanism_detail"])
-         .groupby("Country")["line"]
-         .apply(lambda s: "<br>".join(s.tolist()))
-         .reset_index(name="existing_mechanisms_html")
+    # numbered list of mechanism types (no details)
+    types_list = (
+        g.groupby("Country")["mechanism_type"]
+        .apply(lambda s: "<br>".join([f"{i+1}. {t}" for i, t in enumerate(sorted(set(s.tolist())))]))
+        .reset_index(name="mechanism_types_list_html")
     )
 
     counts = g.groupby("Country")["mechanism_type"].nunique().reset_index(name="mechanism_type_count")
@@ -119,8 +117,9 @@ def summarize_mechanisms(df_long: pd.DataFrame) -> pd.DataFrame:
         .reset_index(name="vcm_projects_sum")
     )
 
-    out = counts.merge(lines, on="Country", how="left").merge(vcm, on="Country", how="left")
-    out["vcm_projects_sum"] = out["vcm_projects_sum"].fillna(0)
+    out = counts.merge(types_list, on="Country", how="left").merge(vcm, on="Country", how="left")
+    out["vcm_projects_sum"] = pd.to_numeric(out["vcm_projects_sum"], errors="coerce").fillna(0).astype(int)
+    out["mechanism_types_list_html"] = out["mechanism_types_list_html"].fillna("No recorded mechanisms in this dataset.")
     return out
 
 # ===== Load
@@ -150,7 +149,6 @@ if st.sidebar.button("Reset filters", use_container_width=True):
             del st.session_state[k]
     st.rerun()
 
-
 f = long.copy()
 if region_sel:
     f = f[f["Region"].isin(region_sel)]
@@ -161,20 +159,19 @@ if country_sel:
 if keyword:
     f = f[f["mechanism_detail"].str.contains(keyword, case=False, na=False)]
 
-# ===== KPIs (stable + in-view)
+# ===== KPIs
 k1, k2, k3, k4 = st.columns(4)
 k1.metric("Countries covered", int(wide["Country"].nunique()))
+
 wide_view = wide.copy()
 if region_sel:
     wide_view = wide_view[wide_view["Region"].isin(region_sel)]
 if country_sel:
     wide_view = wide_view[wide_view["Country"].isin(country_sel)]
-base = wide_view[["Country", "Region"]].drop_duplicates().copy()
-base["iso3"] = base["Country"].apply(to_iso3)
 
 k2.metric("Countries in view", int(wide_view["Country"].nunique()))
-
 k3.metric("Mechanism types in view", int(f["mechanism_type"].nunique()))
+
 vcm_sum = f.loc[f["mechanism_type"] == "VCM project", "vcm_projects"].sum(min_count=1)
 k4.metric("VCM projects (sum)", 0 if pd.isna(vcm_sum) else int(vcm_sum))
 
@@ -184,42 +181,29 @@ st.subheader("World map")
 MAP_OPTIONS = ["Total mechanisms (0–8)"] + list(MECH_COLS.values())
 map_choice = st.selectbox("Map mode", MAP_OPTIONS, index=0, key="map_choice")
 
-
 # Base countries (include zero cases)
 base = wide_view[["Country", "Region"]].drop_duplicates().copy()
 base["iso3"] = base["Country"].apply(to_iso3)
 
-def summarize_mechanisms(df_long: pd.DataFrame) -> pd.DataFrame:
-    g = (
-        df_long.groupby(["Country", "mechanism_type"])["mechanism_detail"]
-        .apply(lambda s: "; ".join(sorted({x for x in s.astype(str).str.strip() if x and x.lower() != "nan"})))
-        .reset_index()
+# Summary from filtered long
+country_summary = summarize_mechanisms(f)
+
+# Merge to base so missing countries become 0
+m = base.merge(country_summary, on="Country", how="left")
+m["mechanism_type_count"] = m["mechanism_type_count"].fillna(0).astype(int)
+m["vcm_projects_sum"] = pd.to_numeric(m["vcm_projects_sum"], errors="coerce").fillna(0).astype(int)
+m["mechanism_types_list_html"] = m["mechanism_types_list_html"].fillna("No recorded mechanisms in this dataset.")
+
+missing_iso = m[m["iso3"].isna()]["Country"].tolist()
+if missing_iso:
+    st.warning(
+        f"ISO3 not found for {len(missing_iso)} countries/territories (not shown on map). "
+        f"Examples: {', '.join(missing_iso[:10])}"
     )
 
-    # list mekanisme (tanpa detail), bernomor
-    types_list = (
-        g.groupby("Country")["mechanism_type"]
-        .apply(lambda s: "<br>".join([f"{i+1}. {t}" for i, t in enumerate(sorted(set(s.tolist())))]))
-        .reset_index(name="mechanism_types_list_html")
-    )
+m_plot = m.dropna(subset=["iso3"]).copy()
 
-    counts = g.groupby("Country")["mechanism_type"].nunique().reset_index(name="mechanism_type_count")
-
-    # VCM sum (buat mode VCM map & chart), pastikan int
-    vcm = (
-        df_long[df_long["mechanism_type"] == "VCM project"]
-        .dropna(subset=["vcm_projects"])
-        .groupby("Country")["vcm_projects"]
-        .sum()
-        .reset_index(name="vcm_projects_sum")
-    )
-
-    out = counts.merge(types_list, on="Country", how="left").merge(vcm, on="Country", how="left")
-    out["vcm_projects_sum"] = pd.to_numeric(out["vcm_projects_sum"], errors="coerce").fillna(0).astype(int)
-    out["mechanism_types_list_html"] = out["mechanism_types_list_html"].fillna("No recorded mechanisms in this dataset.")
-    return out
-
-
+# ---- Choose metric for coloring
 if map_choice == "Total mechanisms (0–8)":
     fig_map = px.choropleth(
         m_plot,
@@ -251,10 +235,7 @@ elif map_choice == "VCM project":
         customdata=m_plot[["vcm_projects_sum", "mechanism_types_list_html"]].values,
     )
 
-
 else:
-    # Presence map for a selected mechanism type (0/1)
-    # Build presence per country from filtered long (f)
     pres = (
         f[f["mechanism_type"] == map_choice]
         .groupby("Country")["mechanism_type"]
@@ -278,13 +259,12 @@ else:
         "<b>%{hovertext}</b><br>" +
         f"{map_choice} present: %{{customdata[0]}}<br><br>" +
         "%{customdata[1]}<extra></extra>",
-        customdata=m_plot2[["present", "existing_mechanisms_html"]].values,
+        customdata=m_plot2[["present", "mechanism_types_list_html"]].values,
     )
 
 st.plotly_chart(fig_map, use_container_width=True, key="map_choropleth")
 
-
-# ===== Tabs for the rest
+# ===== Tabs
 tab1, tab2, tab3 = st.tabs(["Summary charts", "Country profile", "Data table"])
 
 with tab1:
@@ -308,6 +288,7 @@ with tab1:
             top = (
                 v.groupby("Country")["vcm_projects"].sum()
                 .reset_index()
+                .assign(vcm_projects=lambda d: d["vcm_projects"].fillna(0).astype(int))
                 .sort_values("vcm_projects", ascending=False)
                 .head(20)
             )
