@@ -234,12 +234,12 @@ elif map_choice == "VCM project":
         hover_name="Country",
     )
     fig_map.update_traces(
-        hovertemplate=
-        "<b>%{hovertext}</b><br>" +
-        "VCM projects (sum): %{customdata[0]}<br><br>" +
-        "%{customdata[1]}<extra></extra>",
-        customdata=m_plot[["vcm_projects_sum", "existing_mechanisms_html"]].values,
-    )
+    hovertemplate=
+    "<b>%{hovertext}</b><br>" +
+    f"{map_choice} present: %{{customdata[0]}}<br><br>" +
+    "%{customdata[1]}<extra></extra>",
+    customdata=m_plot2[["present", "existing_mechanisms_html"]].values,
+)
 
 else:
     # Presence map for a selected mechanism type (0/1)
