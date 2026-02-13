@@ -159,7 +159,14 @@ if keyword:
 # ===== KPIs (stable + in-view)
 k1, k2, k3, k4 = st.columns(4)
 k1.metric("Countries covered", int(wide["Country"].nunique()))
-k2.metric("Countries in view", int(f["Country"].nunique()))
+wide_view = wide.copy()
+if region_sel:
+    wide_view = wide_view[wide_view["Region"].isin(region_sel)]
+if country_sel:
+    wide_view = wide_view[wide_view["Country"].isin(country_sel)]
+
+k2.metric("Countries in view", int(wide_view["Country"].nunique()))
+
 k3.metric("Mechanism types in view", int(f["mechanism_type"].nunique()))
 vcm_sum = f.loc[f["mechanism_type"] == "VCM project", "vcm_projects"].sum(min_count=1)
 k4.metric("VCM projects (sum)", 0 if pd.isna(vcm_sum) else int(vcm_sum))
