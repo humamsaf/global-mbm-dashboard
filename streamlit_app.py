@@ -167,6 +167,8 @@ if region_sel:
     wide_view = wide_view[wide_view["Region"].isin(region_sel)]
 if country_sel:
     wide_view = wide_view[wide_view["Country"].isin(country_sel)]
+base = wide_view[["Country", "Region"]].drop_duplicates().copy()
+base["iso3"] = base["Country"].apply(to_iso3)
 
 k2.metric("Countries in view", int(wide_view["Country"].nunique()))
 
@@ -175,41 +177,103 @@ vcm_sum = f.loc[f["mechanism_type"] == "VCM project", "vcm_projects"].sum(min_co
 k4.metric("VCM projects (sum)", 0 if pd.isna(vcm_sum) else int(vcm_sum))
 
 st.divider()
+MAP_OPTIONS = ["Total mechanisms (0–8)"] + list(MECH_COLS.values())
+map_choice = st.selectbox("Map mode", MAP_OPTIONS, index=0, key="map_choice")
 
-# ===== Map (single metric, clean)
+st.subheader("World map")
+
+MAP_OPTIONS = ["Total mechanisms (0–8)"] + list(MECH_COLS.values())
+map_choice = st.selectbox("Map mode", MAP_OPTIONS, index=0, key="map_choice")
+
+# Base countries (include zero cases)
+base = wide_view[["Country", "Region"]].drop_duplicates().copy()
+base["iso3"] = base["Country"].apply(to_iso3)
+
+# Summary from filtered long
 country_summary = summarize_mechanisms(f)
-country_summary["iso3"] = country_summary["Country"].apply(to_iso3)
 
-missing_iso = country_summary[country_summary["iso3"].isna()]["Country"].tolist()
+# Merge to base so missing countries become 0
+m = base.merge(country_summary, on="Country", how="left")
+m["mechanism_type_count"] = m["mechanism_type_count"].fillna(0).astype(int)
+m["vcm_projects_sum"] = m["vcm_projects_sum"].fillna(0)
+m["existing_mechanisms_html"] = m["existing_mechanisms_html"].fillna("No recorded mechanisms in this dataset.")
+
+missing_iso = m[m["iso3"].isna()]["Country"].tolist()
 if missing_iso:
     st.warning(
         f"ISO3 not found for {len(missing_iso)} countries/territories (not shown on map). "
         f"Examples: {', '.join(missing_iso[:10])}"
     )
 
-m = country_summary.dropna(subset=["iso3"]).copy()
+m_plot = m.dropna(subset=["iso3"]).copy()
 
-st.subheader("World map — total market-based mechanisms (0–8)")
-st.caption("Color indicates the number of existing mechanism categories per country; hover for policy details.")
+# ---- Choose metric for coloring
+if map_choice == "Total mechanisms (0–8)":
+    color_col = "mechanism_type_count"
+    fig_map = px.choropleth(
+        m_plot,
+        locations="iso3",
+        color=color_col,
+        hover_name="Country",
+    )
+    fig_map.update_coloraxes(cmin=0, cmax=8)
+    fig_map.update_traces(
+        hovertemplate=
+        "<b>%{hovertext}</b><br>" +
+        "Total mechanisms (0–8): %{customdata[0]}<br>" +
+        "VCM projects (sum): %{customdata[1]}<br><br>" +
+        "%{customdata[2]}<extra></extra>",
+        customdata=m_plot[["mechanism_type_count", "vcm_projects_sum", "existing_mechanisms_html"]].values,
+    )
 
-fig_map = px.choropleth(
-    m,
-    locations="iso3",
-    color="mechanism_type_count",
-    hover_name="Country",
-)
-fig_map.update_coloraxes(cmin=0, cmax=8)
+elif map_choice == "VCM project":
+    # For VCM map, keep numeric intensity
+    color_col = "vcm_projects_sum"
+    fig_map = px.choropleth(
+        m_plot,
+        locations="iso3",
+        color=color_col,
+        hover_name="Country",
+    )
+    fig_map.update_traces(
+        hovertemplate=
+        "<b>%{hovertext}</b><br>" +
+        "VCM projects (sum): %{customdata[0]}<br><br>" +
+        "%{customdata[1]}<extra></extra>",
+        customdata=m_plot[["vcm_projects_sum", "existing_mechanisms_html"]].values,
+    )
 
-fig_map.update_traces(
-    hovertemplate=
-    "<b>%{hovertext}</b><br>" +
-    "Total mechanisms (0–8): %{customdata[0]}<br>" +
-    "VCM projects (sum): %{customdata[1]}<br><br>" +
-    "%{customdata[2]}<extra></extra>",
-    customdata=m[["mechanism_type_count", "vcm_projects_sum", "existing_mechanisms_html"]].values,
-)
+else:
+    # Presence map for a selected mechanism type (0/1)
+    # Build presence per country from filtered long (f)
+    pres = (
+        f[f["mechanism_type"] == map_choice]
+        .groupby("Country")["mechanism_type"]
+        .size()
+        .reset_index(name="present")
+    )
+    pres["present"] = 1
+
+    m_plot2 = m_plot.merge(pres[["Country", "present"]], on="Country", how="left")
+    m_plot2["present"] = m_plot2["present"].fillna(0).astype(int)
+
+    fig_map = px.choropleth(
+        m_plot2,
+        locations="iso3",
+        color="present",
+        hover_name="Country",
+    )
+    fig_map.update_coloraxes(cmin=0, cmax=1)
+    fig_map.update_traces(
+        hovertemplate=
+        "<b>%{hovertext}</b><br>" +
+        f"{map_choice} present: %{customdata[0]}<br><br>" +
+        "%{customdata[1]}<extra></extra>",
+        customdata=m_plot2[["present", "existing_mechanisms_html"]].values,
+    )
 
 st.plotly_chart(fig_map, use_container_width=True, key="map_choropleth")
+
 
 # ===== Tabs for the rest
 tab1, tab2, tab3 = st.tabs(["Summary charts", "Country profile", "Data table"])
