@@ -189,59 +189,68 @@ map_choice = st.selectbox("Map mode", MAP_OPTIONS, index=0, key="map_choice")
 base = wide_view[["Country", "Region"]].drop_duplicates().copy()
 base["iso3"] = base["Country"].apply(to_iso3)
 
-# Summary from filtered long
-country_summary = summarize_mechanisms(f)
-
-# Merge to base so missing countries become 0
-m = base.merge(country_summary, on="Country", how="left")
-m["mechanism_type_count"] = m["mechanism_type_count"].fillna(0).astype(int)
-m["vcm_projects_sum"] = m["vcm_projects_sum"].fillna(0)
-m["existing_mechanisms_html"] = m["existing_mechanisms_html"].fillna("No recorded mechanisms in this dataset.")
-
-missing_iso = m[m["iso3"].isna()]["Country"].tolist()
-if missing_iso:
-    st.warning(
-        f"ISO3 not found for {len(missing_iso)} countries/territories (not shown on map). "
-        f"Examples: {', '.join(missing_iso[:10])}"
+def summarize_mechanisms(df_long: pd.DataFrame) -> pd.DataFrame:
+    g = (
+        df_long.groupby(["Country", "mechanism_type"])["mechanism_detail"]
+        .apply(lambda s: "; ".join(sorted({x for x in s.astype(str).str.strip() if x and x.lower() != "nan"})))
+        .reset_index()
     )
 
-m_plot = m.dropna(subset=["iso3"]).copy()
+    # list mekanisme (tanpa detail), bernomor
+    types_list = (
+        g.groupby("Country")["mechanism_type"]
+        .apply(lambda s: "<br>".join([f"{i+1}. {t}" for i, t in enumerate(sorted(set(s.tolist())))]))
+        .reset_index(name="mechanism_types_list_html")
+    )
 
-# ---- Choose metric for coloring
+    counts = g.groupby("Country")["mechanism_type"].nunique().reset_index(name="mechanism_type_count")
+
+    # VCM sum (buat mode VCM map & chart), pastikan int
+    vcm = (
+        df_long[df_long["mechanism_type"] == "VCM project"]
+        .dropna(subset=["vcm_projects"])
+        .groupby("Country")["vcm_projects"]
+        .sum()
+        .reset_index(name="vcm_projects_sum")
+    )
+
+    out = counts.merge(types_list, on="Country", how="left").merge(vcm, on="Country", how="left")
+    out["vcm_projects_sum"] = pd.to_numeric(out["vcm_projects_sum"], errors="coerce").fillna(0).astype(int)
+    out["mechanism_types_list_html"] = out["mechanism_types_list_html"].fillna("No recorded mechanisms in this dataset.")
+    return out
+
+
 if map_choice == "Total mechanisms (0–8)":
-    color_col = "mechanism_type_count"
     fig_map = px.choropleth(
         m_plot,
         locations="iso3",
-        color=color_col,
+        color="mechanism_type_count",
         hover_name="Country",
     )
     fig_map.update_coloraxes(cmin=0, cmax=8)
     fig_map.update_traces(
         hovertemplate=
         "<b>%{hovertext}</b><br>" +
-        "Total mechanisms (0–8): %{customdata[0]}<br>" +
-        "VCM projects (sum): %{customdata[1]}<br><br>" +
-        "%{customdata[2]}<extra></extra>",
-        customdata=m_plot[["mechanism_type_count", "vcm_projects_sum", "existing_mechanisms_html"]].values,
+        "Total mechanisms (0–8): %{customdata[0]}<br><br>" +
+        "%{customdata[1]}<extra></extra>",
+        customdata=m_plot[["mechanism_type_count", "mechanism_types_list_html"]].values,
     )
 
 elif map_choice == "VCM project":
-    # For VCM map, keep numeric intensity
-    color_col = "vcm_projects_sum"
     fig_map = px.choropleth(
         m_plot,
         locations="iso3",
-        color=color_col,
+        color="vcm_projects_sum",
         hover_name="Country",
     )
     fig_map.update_traces(
-    hovertemplate=
-    "<b>%{hovertext}</b><br>" +
-    f"{map_choice} present: %{{customdata[0]}}<br><br>" +
-    "%{customdata[1]}<extra></extra>",
-    customdata=m_plot2[["present", "existing_mechanisms_html"]].values,
-)
+        hovertemplate=
+        "<b>%{hovertext}</b><br>" +
+        "VCM projects (sum): %{customdata[0]}<br><br>" +
+        "%{customdata[1]}<extra></extra>",
+        customdata=m_plot[["vcm_projects_sum", "mechanism_types_list_html"]].values,
+    )
+
 
 else:
     # Presence map for a selected mechanism type (0/1)
