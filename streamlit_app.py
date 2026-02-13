@@ -80,6 +80,13 @@ def tidy_long(df_raw: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
 
 raw = load_raw()
 wide, long = tidy_long(raw)
+st.write("Countries (wide):", wide["Country"].nunique())
+extras = (
+    wide["Country"].astype(str).str.strip()
+    .value_counts()
+)
+st.write("Sample country names (last 30 alphabetically):")
+st.write(sorted(wide["Country"].astype(str).str.strip().unique())[-30:])
 
 st.title("Global Market-Based Mechanisms Dashboard")
 
