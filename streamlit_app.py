@@ -223,9 +223,8 @@ fig_map.update_traces(
     customdata=m[["iso3", "mechanism_type_count", "vcm_projects_sum", "existing_mechanisms_html"]].values,
 )
 
-st.plotly_chart(fig_map, use_container_width=True)
+st.plotly_chart(fig_map, use_container_width=True, key="map_choropleth")
 
-st.plotly_chart(fig_map, use_container_width=True)
 
 # ---- Charts
 c1, c2 = st.columns(2)
