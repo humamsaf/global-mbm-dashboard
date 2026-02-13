@@ -39,6 +39,8 @@ MANUAL_ISO3 = {
     "Venezuela": "VEN",
     "Tanzania": "TZA",
     "Micronesia": "FSM",
+    "Palestine": "PSE",
+
 }
 
 def to_iso3(name: str):
@@ -265,7 +267,7 @@ else:
     fig_map.update_traces(
         hovertemplate=
         "<b>%{hovertext}</b><br>" +
-        f"{map_choice} present: %{customdata[0]}<br><br>" +
+        f"{map_choice} present: %{{customdata[0]}}<br><br>" +
         "%{customdata[1]}<extra></extra>",
         customdata=m_plot2[["present", "existing_mechanisms_html"]].values,
     )
