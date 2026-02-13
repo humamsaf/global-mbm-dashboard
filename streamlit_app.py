@@ -168,10 +168,6 @@ if region_sel:
 if country_sel:
     wide_view = wide_view[wide_view["Country"].isin(country_sel)]
 
-st.write("DEBUG wide countries:", wide["Country"].nunique())
-st.write("DEBUG wide_view countries:", wide_view["Country"].nunique())
-
-
 k2.metric("Countries in view", int(wide_view["Country"].nunique()))
 
 k3.metric("Mechanism types in view", int(f["mechanism_type"].nunique()))
