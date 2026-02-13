@@ -181,12 +181,7 @@ def summarize_mechanisms(df_long: pd.DataFrame) -> pd.DataFrame:
 country_summary = summarize_mechanisms(f)
 country_summary["iso3"] = country_summary["Country"].apply(to_iso3)
 
-st.subheader("World map (choropleth)")
-metric = st.radio(
-    "Map color",
-    ["Total mechanisms (0–8)", "VCM projects (sum)"],
-    horizontal=True
-)
+
 
 st.caption("Map color: Total mechanisms (0–8)")
 plot_col = "mechanism_type_count"
