@@ -429,7 +429,27 @@ with tab1:
             .reset_index(name="countries")
             .sort_values("countries", ascending=False)
         )
-        st.plotly_chart(px.bar(by_type, x="mechanism_type", y="countries"), use_container_width=True, key="bar_type")
+       # ===== MAP CLICK HANDLER (LANGKAH 3) =====
+
+from streamlit_plotly_events import plotly_events
+
+# mapping ISO3 -> Country (harus dari dataframe yang sama dengan map)
+iso3_to_country = dict(zip(m_plot["iso3"], m_plot["Country"]))
+
+selected = plotly_events(
+    fig_map,
+    click_event=True,
+    select_event=False,
+    hover_event=False,
+    key="map_evt",
+)
+
+if selected:
+    iso3 = selected[0].get("location")  # ISO3 dari choropleth
+    if iso3 and iso3 in iso3_to_country:
+        st.session_state.selected_country = iso3_to_country[iso3]
+        st.session_state.selected_mechanism = None
+        st.rerun()
 
     with c2:
         st.subheader("Top countries by VCM projects")
