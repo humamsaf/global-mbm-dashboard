@@ -8,7 +8,7 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import pycountry
-
+from streamlit_plotly_events import plotly_events
 # ---------- Page ----------
 st.set_page_config(page_title="Global MBM Dashboard", layout="wide")
 
