@@ -433,23 +433,25 @@ with tab1:
 
 from streamlit_plotly_events import plotly_events
 
-# mapping ISO3 -> Country (harus dari dataframe yang sama dengan map)
-iso3_to_country = dict(zip(m_plot["iso3"], m_plot["Country"]))
+# key dibuat unik agar tidak konflik bila Streamlit merender ulang komponen dalam kondisi tertentu
+map_key = f"map_evt_{map_choice}"
 
 selected = plotly_events(
     fig_map,
     click_event=True,
     select_event=False,
     hover_event=False,
-    key="map_evt",
+    key=map_key,
 )
 
 if selected:
-    iso3 = selected[0].get("location")  # ISO3 dari choropleth
-    if iso3 and iso3 in iso3_to_country:
-        st.session_state.selected_country = iso3_to_country[iso3]
-        st.session_state.selected_mechanism = None
-        st.rerun()
+    iso3 = selected[0].get("location")
+    if iso3:
+        iso3_to_country = dict(zip(map_df["iso3"], map_df["Country"]))
+        if iso3 in iso3_to_country:
+            st.session_state.selected_country = iso3_to_country[iso3]
+            st.session_state.selected_mechanism = None
+            st.rerun()
 
     with c2:
         st.subheader("Top countries by VCM projects")
