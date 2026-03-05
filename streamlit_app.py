@@ -1,17 +1,22 @@
 # streamlit_app.py
 # ------------------------------------------------------------
-# ETS Dashboard (reads ETS.xlsx)
-# - Filters: Type, Region, Jurisdiction search, Start year range, Price range
-# - Metrics: count, avg/median/min/max USD price, earliest start year
-# - Charts: Top prices bar, price histogram, start-year vs price scatter
+# ETS Dashboard (reads ETS.xlsx, sheet: "Copy of 1. ETS")
+# Features:
+# - Sidebar filters: search, Type, Region, start-year, price (USD), coverage (%)
+# - Metrics: instrument count, price stats, coverage stats
+# - Charts: top USD prices, USD histogram, start-year vs USD scatter,
+#           coverage histogram, avg coverage by Region/Type
 # - Table + CSV download
+#
+# Put ETS.xlsx in:
+#   ./data/ETS.xlsx   (recommended)
+# or beside this file, or (in sandbox) /mnt/data/ETS.xlsx
 # ------------------------------------------------------------
 
 from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -21,19 +26,17 @@ import streamlit as st
 APP_TITLE = "ETS & Carbon Pricing Instruments Dashboard"
 DEFAULT_SHEET = "Copy of 1. ETS"
 
-# ---------- Page config ----------
+# -------------------------
+# Page config
+# -------------------------
 st.set_page_config(page_title=APP_TITLE, page_icon="📊", layout="wide")
 st.title("📊 ETS Dashboard")
 st.caption("Interactive dashboard from ETS.xlsx (filters, charts, and table export).")
 
-# ---------- File resolver ----------
+# -------------------------
+# File resolver
+# -------------------------
 def resolve_excel_path() -> Path:
-    """
-    Tries common locations:
-    - ./data/ETS.xlsx   (recommended for repo)
-    - ./ETS.xlsx
-    - /mnt/data/ETS.xlsx (ChatGPT sandbox / notebooks)
-    """
     candidates = [
         Path("data") / "ETS.xlsx",
         Path("ETS.xlsx"),
@@ -42,22 +45,19 @@ def resolve_excel_path() -> Path:
     for p in candidates:
         if p.exists():
             return p
-    # If not found, show helpful error
-    raise FileNotFoundError(
-        "ETS.xlsx not found. Put it in ./data/ETS.xlsx or beside streamlit_app.py."
-    )
+    raise FileNotFoundError("ETS.xlsx not found. Put it in ./data/ETS.xlsx or beside streamlit_app.py.")
 
-# ---------- Parsing helpers ----------
+# -------------------------
+# Parsing helpers
+# -------------------------
 USD_RE = re.compile(r"USD\s*([0-9]+(?:\.[0-9]+)?)", re.IGNORECASE)
 
 def parse_usd_price(x) -> float:
     """
-    Extracts the first 'USD <number>' pattern from the Price rate column.
-    Returns NaN if not parseable.
+    Extract first 'USD <number>' from 'Price rate' text.
     Examples:
       'USD 59.47 / 55 EURO' -> 59.47
       'USD 12.34 / 86.13 CNY' -> 12.34
-      NaN -> NaN
     """
     if x is None or (isinstance(x, float) and np.isnan(x)):
         return np.nan
@@ -70,34 +70,62 @@ def parse_usd_price(x) -> float:
     except ValueError:
         return np.nan
 
+def to_coverage_pct(x) -> float:
+    """
+    Converts coverage share to percentage.
+    Accepts:
+      - 0.59 -> 59
+      - 59 -> 59
+      - '59%' -> 59
+    """
+    if x is None or (isinstance(x, float) and np.isnan(x)):
+        return np.nan
+
+    s = str(x).strip()
+    if not s:
+        return np.nan
+
+    if s.endswith("%"):
+        s = s[:-1].strip()
+
+    try:
+        v = float(s)
+    except ValueError:
+        return np.nan
+
+    # heuristic: share vs percent
+    if v <= 1.5:
+        return v * 100.0
+    return v
+
 def clean_columns(df: pd.DataFrame) -> pd.DataFrame:
-    # normalize column names (trim spaces)
     df = df.copy()
     df.columns = [c.strip() for c in df.columns]
 
-    # expected columns (based on your file)
-    # "Price rate " sometimes has trailing spaces -> handled by strip above
-    if "Price rate" not in df.columns and "Price rate" in [c.replace("  ", " ") for c in df.columns]:
-        # just in case (rare)
-        pass
-
-    # parse USD price
+    # price
     if "Price rate" in df.columns:
-        price_col = "Price rate"
+        df["price_usd"] = df["Price rate"].apply(parse_usd_price)
     else:
-        # in your file it's "Price rate " (space); after strip it becomes "Price rate"
-        price_col = "Price rate"
+        df["price_usd"] = np.nan
 
-    df["price_usd"] = df[price_col].apply(parse_usd_price) if price_col in df.columns else np.nan
-
-    # start year (your file is int)
+    # start year
     if "Start date" in df.columns:
         df["start_year"] = pd.to_numeric(df["Start date"], errors="coerce").astype("Int64")
+    else:
+        df["start_year"] = pd.Series([pd.NA] * len(df), dtype="Int64")
 
-    # clean some text columns for safer filtering
-    for c in ["Instrument name", "Type", "Jurisdiction", "Region", "GHG"]:
+    # coverage
+    share_col = "Share of jurisdiction's"
+    if share_col in df.columns:
+        df["coverage_pct"] = df[share_col].apply(to_coverage_pct)
+    else:
+        df["coverage_pct"] = np.nan
+
+    # clean text columns for filtering
+    for c in ["Instrument name", "Type", "Jurisdiction", "Region", "GHG", "Sector coverage"]:
         if c in df.columns:
-            df[c] = df[c].astype(str).replace({"nan": np.nan}).str.strip()
+            df[c] = df[c].replace({np.nan: None})
+            df[c] = df[c].astype(str).replace({"None": np.nan, "nan": np.nan}).str.strip()
 
     return df
 
@@ -106,7 +134,9 @@ def load_data(path: Path, sheet: str) -> pd.DataFrame:
     df = pd.read_excel(path, sheet_name=sheet)
     return clean_columns(df)
 
-# ---------- Load ----------
+# -------------------------
+# Load data
+# -------------------------
 try:
     excel_path = resolve_excel_path()
 except FileNotFoundError as e:
@@ -116,40 +146,76 @@ except FileNotFoundError as e:
 with st.spinner("Loading ETS.xlsx ..."):
     df = load_data(excel_path, DEFAULT_SHEET)
 
-# ---------- Sidebar ----------
+# -------------------------
+# Sidebar filters
+# -------------------------
 st.sidebar.header("Filters")
 
-# Search
 q = st.sidebar.text_input("Search (Instrument / Jurisdiction)", value="").strip()
 
-# Multi-select filters
-type_options = sorted([x for x in df["Type"].dropna().unique()]) if "Type" in df.columns else []
-region_options = sorted([x for x in df["Region"].dropna().unique()]) if "Region" in df.columns else []
+type_options = sorted([x for x in df.get("Type", pd.Series([], dtype=str)).dropna().unique()])
+region_options = sorted([x for x in df.get("Region", pd.Series([], dtype=str)).dropna().unique()])
 
 sel_types = st.sidebar.multiselect("Type", options=type_options, default=type_options)
 sel_regions = st.sidebar.multiselect("Region", options=region_options, default=region_options)
 
 # Start year range
-min_year = int(df["start_year"].min()) if "start_year" in df.columns and df["start_year"].notna().any() else 1900
-max_year = int(df["start_year"].max()) if "start_year" in df.columns and df["start_year"].notna().any() else 2100
-year_range = st.sidebar.slider("Start year range", min_value=min_year, max_value=max_year, value=(min_year, max_year))
+if "start_year" in df.columns and df["start_year"].notna().any():
+    min_year = int(df["start_year"].min())
+    max_year = int(df["start_year"].max())
+else:
+    min_year, max_year = 1900, 2100
+
+year_range = st.sidebar.slider(
+    "Start year range",
+    min_value=min_year,
+    max_value=max_year,
+    value=(min_year, max_year),
+)
 
 # Price range (USD)
-price_series = df["price_usd"].dropna()
+price_series = df["price_usd"].dropna() if "price_usd" in df.columns else pd.Series([], dtype=float)
 if len(price_series) > 0:
     pmin = float(price_series.min())
     pmax = float(price_series.max())
-    price_range = st.sidebar.slider("Price (USD) range", min_value=float(np.floor(pmin)), max_value=float(np.ceil(pmax)), value=(float(np.floor(pmin)), float(np.ceil(pmax))))
+    price_range = st.sidebar.slider(
+        "Price (USD) range",
+        min_value=float(np.floor(pmin)),
+        max_value=float(np.ceil(pmax)),
+        value=(float(np.floor(pmin)), float(np.ceil(pmax))),
+    )
 else:
     price_range = (0.0, 1.0)
     st.sidebar.info("No USD prices could be parsed from 'Price rate'.")
 
-top_n = st.sidebar.slider("Top N (for bar chart)", min_value=5, max_value=30, value=15)
+# Coverage range (%)
+cov_series = df["coverage_pct"].dropna() if "coverage_pct" in df.columns else pd.Series([], dtype=float)
+if len(cov_series) > 0:
+    cmin = float(np.floor(cov_series.min()))
+    cmax = float(np.ceil(cov_series.max()))
+    # keep slider sane; if data somehow >100, still allow (up to 150 cap for UI)
+    slider_min = max(0.0, cmin)
+    slider_max = min(150.0, cmax) if cmax <= 150 else cmax
+    default_max = min(100.0, cmax) if cmax <= 150 else cmax
+
+    coverage_range = st.sidebar.slider(
+        "Coverage (%) range",
+        min_value=float(slider_min),
+        max_value=float(slider_max),
+        value=(float(slider_min), float(default_max)),
+    )
+else:
+    coverage_range = (0.0, 100.0)
+    st.sidebar.info("No coverage values found in 'Share of jurisdiction's'.")
+
+top_n = st.sidebar.slider("Top N (for top-price chart)", min_value=5, max_value=30, value=15)
 
 st.sidebar.divider()
 st.sidebar.caption(f"📄 Data file: {excel_path}")
 
-# ---------- Apply filters ----------
+# -------------------------
+# Apply filters
+# -------------------------
 f = df.copy()
 
 if "Type" in f.columns and sel_types:
@@ -159,56 +225,71 @@ if "Region" in f.columns and sel_regions:
     f = f[f["Region"].isin(sel_regions)]
 
 if "start_year" in f.columns:
-    f = f[f["start_year"].between(year_range[0], year_range[1])]
+    f = f[f["start_year"].between(year_range[0], year_range[1]) | f["start_year"].isna()]
 
 # price filter (only apply to rows with parsed USD)
 if "price_usd" in f.columns:
     f = f[(f["price_usd"].isna()) | (f["price_usd"].between(price_range[0], price_range[1]))]
 
+# coverage filter (only apply to rows with coverage)
+if "coverage_pct" in f.columns:
+    f = f[(f["coverage_pct"].isna()) | (f["coverage_pct"].between(coverage_range[0], coverage_range[1]))]
+
 if q:
-    mask = False
+    mask = pd.Series(False, index=f.index)
     if "Instrument name" in f.columns:
         mask = mask | f["Instrument name"].fillna("").str.contains(q, case=False, na=False)
     if "Jurisdiction" in f.columns:
         mask = mask | f["Jurisdiction"].fillna("").str.contains(q, case=False, na=False)
     f = f[mask]
 
-# ---------- Metrics ----------
-c1, c2, c3, c4, c5 = st.columns(5)
+# -------------------------
+# Metrics
+# -------------------------
+c1, c2, c3, c4, c5, c6 = st.columns(6)
 
 count_instruments = int(len(f))
-prices = f["price_usd"].dropna()
+prices = f["price_usd"].dropna() if "price_usd" in f.columns else pd.Series([], dtype=float)
+cov = f["coverage_pct"].dropna() if "coverage_pct" in f.columns else pd.Series([], dtype=float)
 
 c1.metric("Instruments", f"{count_instruments:,}")
 
 if len(prices) > 0:
     c2.metric("Avg price (USD)", f"{prices.mean():.2f}")
     c3.metric("Median price (USD)", f"{prices.median():.2f}")
-    c4.metric("Max price (USD)", f"{prices.max():.2f}")
-    c5.metric("Min price (USD)", f"{prices.min():.2f}")
 else:
     c2.metric("Avg price (USD)", "—")
     c3.metric("Median price (USD)", "—")
-    c4.metric("Max price (USD)", "—")
-    c5.metric("Min price (USD)", "—")
+
+if len(cov) > 0:
+    c4.metric("Avg coverage (%)", f"{cov.mean():.1f}")
+    c5.metric("Median coverage (%)", f"{cov.median():.1f}")
+    c6.metric("Max coverage (%)", f"{cov.max():.1f}")
+else:
+    c4.metric("Avg coverage (%)", "—")
+    c5.metric("Median coverage (%)", "—")
+    c6.metric("Max coverage (%)", "—")
 
 st.divider()
 
-# ---------- Charts ----------
+# -------------------------
+# Charts
+# -------------------------
 left, right = st.columns([1.15, 0.85])
 
 with left:
     st.subheader("Top prices (USD)")
-    if len(prices) == 0:
+    if len(prices) == 0 or "price_usd" not in f.columns:
         st.info("No parsed USD prices to plot. Check 'Price rate' formatting.")
     else:
         top = f.dropna(subset=["price_usd"]).sort_values("price_usd", ascending=False).head(top_n)
+        y_col = "Instrument name" if "Instrument name" in top.columns else top.index
         fig = px.bar(
             top,
             x="price_usd",
-            y="Instrument name" if "Instrument name" in top.columns else top.index,
+            y=y_col,
             orientation="h",
-            hover_data=[c for c in ["Jurisdiction", "Region", "Type", "start_year"] if c in top.columns],
+            hover_data=[c for c in ["Jurisdiction", "Region", "Type", "start_year", "coverage_pct"] if c in top.columns],
         )
         fig.update_layout(height=520, yaxis_title="", xaxis_title="Price (USD)")
         st.plotly_chart(fig, use_container_width=True)
@@ -219,7 +300,7 @@ with right:
         st.info("No parsed USD prices to plot.")
     else:
         fig2 = px.histogram(f.dropna(subset=["price_usd"]), x="price_usd", nbins=15)
-        fig2.update_layout(height=240, xaxis_title="Price (USD)", yaxis_title="Count")
+        fig2.update_layout(height=230, xaxis_title="Price (USD)", yaxis_title="Count")
         st.plotly_chart(fig2, use_container_width=True)
 
     st.subheader("Start year vs price (USD)")
@@ -233,17 +314,53 @@ with right:
             x="start_year",
             y="price_usd",
             color=color_col,
-            hover_data=[c for c in ["Instrument name", "Jurisdiction", "Region"] if c in scat.columns],
+            hover_data=[c for c in ["Instrument name", "Jurisdiction", "Region", "coverage_pct"] if c in scat.columns],
         )
-        fig3.update_layout(height=260, xaxis_title="Start year", yaxis_title="Price (USD)")
+        fig3.update_layout(height=240, xaxis_title="Start year", yaxis_title="Price (USD)")
         st.plotly_chart(fig3, use_container_width=True)
+
+    st.subheader("Coverage distribution (%)")
+    if "coverage_pct" not in f.columns or f["coverage_pct"].dropna().empty:
+        st.info("No coverage data to plot.")
+    else:
+        fig4 = px.histogram(f.dropna(subset=["coverage_pct"]), x="coverage_pct", nbins=12)
+        fig4.update_layout(height=230, xaxis_title="Coverage (%)", yaxis_title="Count")
+        st.plotly_chart(fig4, use_container_width=True)
+
+    st.subheader("Avg coverage by Region / Type")
+    if "coverage_pct" not in f.columns or f["coverage_pct"].dropna().empty:
+        st.info("No coverage data to aggregate.")
+    else:
+        group_cols = []
+        if "Region" in f.columns:
+            group_cols.append("Region")
+        if "Type" in f.columns:
+            group_cols.append("Type")
+
+        if group_cols:
+            agg = (
+                f.dropna(subset=["coverage_pct"])
+                .groupby(group_cols, dropna=False)["coverage_pct"]
+                .mean()
+                .reset_index()
+                .sort_values("coverage_pct", ascending=False)
+                .head(20)
+            )
+            y = "Region" if "Region" in agg.columns else group_cols[0]
+            color = "Type" if ("Type" in agg.columns and y != "Type") else None
+            fig5 = px.bar(agg, x="coverage_pct", y=y, color=color, orientation="h")
+            fig5.update_layout(height=320, xaxis_title="Avg coverage (%)", yaxis_title="")
+            st.plotly_chart(fig5, use_container_width=True)
+        else:
+            st.info("Region/Type columns not available for grouping.")
 
 st.divider()
 
-# ---------- Table ----------
+# -------------------------
+# Table + download
+# -------------------------
 st.subheader("Data table")
 
-# choose columns to show (keep original Price rate too)
 preferred_cols = [
     "Instrument name",
     "Type",
@@ -253,6 +370,8 @@ preferred_cols = [
     "Region",
     "Price rate",
     "price_usd",
+    "Share of jurisdiction's",
+    "coverage_pct",
     "GHG",
     "Sector coverage",
     "Threshold",
@@ -261,14 +380,22 @@ preferred_cols = [
 ]
 show_cols = [c for c in preferred_cols if c in f.columns]
 
-st.dataframe(
-    f[show_cols].sort_values(["price_usd", "start_year"], ascending=[False, True], na_position="last"),
-    use_container_width=True,
-    height=520,
-)
+sort_cols = []
+if "price_usd" in f.columns:
+    sort_cols.append("price_usd")
+if "coverage_pct" in f.columns:
+    sort_cols.append("coverage_pct")
+if "start_year" in f.columns:
+    sort_cols.append("start_year")
 
-# Download
-csv = f[show_cols].to_csv(index=False).encode("utf-8")
+if sort_cols:
+    table_df = f[show_cols].sort_values(sort_cols, ascending=[False] * len(sort_cols), na_position="last")
+else:
+    table_df = f[show_cols]
+
+st.dataframe(table_df, use_container_width=True, height=540)
+
+csv = table_df.to_csv(index=False).encode("utf-8")
 st.download_button(
     "⬇️ Download filtered CSV",
     data=csv,
@@ -276,4 +403,4 @@ st.download_button(
     mime="text/csv",
 )
 
-st.caption("Notes: `price_usd` is parsed from the first `USD <number>` found in 'Price rate'. Rows without USD stay blank.")
+st.caption("Notes: `price_usd` parsed from first 'USD <number>' in 'Price rate'. `coverage_pct` derived from 'Share of jurisdiction's'.")
